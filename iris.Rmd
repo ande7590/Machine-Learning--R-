@@ -1,0 +1,93 @@
+---
+title: "Iris Data"
+author: "Mike McPhee Anderson"
+date: "December 21, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+if (!require(pacman)) {
+  install.packages("pacman")
+  library("pacman")
+}
+
+pacman::p_load(tidyverse, datasets, kableExtra, caret, rpart, rpart.plot, e1071)
+
+data(iris)
+
+```
+
+## Iris Data Set
+
+The iris (flower) dataset is commonly used for classification problems.  The objective is to identify the iris's *species* based upon measurements of the *sepal* and *petal*.  Summary of the dataset is below:
+
+```{r data-summary, echo=FALSE}
+
+options(width=500)
+
+summary(iris)
+
+```
+
+## Visualization
+
+### Basic Clustering
+
+Start by clustering based on size.  Both the Sepal and Petal have length and width; perform a dimensionality reduction by converting this to be a size.  Two new attributes will be added, "Sepal.Size" and "Petal.Size".  
+
+```{r clustering-by-size, echo=FALSE}
+
+# Add the new attributes
+iris <- iris %>% mutate(
+  Sepal.Size = Sepal.Length * Sepal.Width,
+  Petal.Size = Petal.Length * Petal.Width
+)
+
+# Plot it
+ggplot(iris, aes(x=Sepal.Size, y=Petal.Size, col=Species, shape=Species)) + geom_point()
+
+```
+
+
+That worked pretty well, it's apparent that the *setosa* has a small petal size, and *virginica* has a large petal size.  We'll add preliminary lines to mimic the rules that a decision tree might find.  It appears that Petal size is a good predictor
+
+
+```{r}
+
+# Plot it with an "eye-balled" decision boundary on Petal.Size
+ggplot(iris, aes(x=Sepal.Size, y=Petal.Size, col=Species, shape=Species)) + 
+  geom_point() + 
+  geom_hline(yintercept = 8) +
+  geom_hline(yintercept = 2.5)
+
+
+```
+
+
+## Classification Models
+
+### Decision Tree
+
+With 150 observations in the data set, 5-folds sounds about right for *k-fold cross-validation*.  We'll fit an actual decision tree to the data and plot the results.  The right thing to do would be training it on a subset, and validating against a final hold-out set.  But this is a lot of work.
+
+```{r}
+
+# five folds, repeated 3 times
+trCtrl <- trainControl(method="repeatedcv", number=5, repeats=3)
+
+# tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
+# in this case it is the "complexity" of the decision tree, e.g. gini information gain
+treeFit <- train(Species ~ Petal.Size, data=iris, 
+                 method="rpart",
+                 trControl=trCtrl,
+                 tuneLength=10)
+
+# plot the tree
+prp(treeFit$finalModel)
+
+
+```
+
+
+

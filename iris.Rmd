@@ -12,9 +12,13 @@ if (!require(pacman)) {
   library("pacman")
 }
 
-pacman::p_load(tidyverse, datasets, kableExtra, caret, rpart, rpart.plot, e1071)
+pacman::p_load(tidyverse, datasets, kableExtra, 
+               caret, rpart, rpart.plot, e1071,
+               nnet, NeuralNetTools)
 
 data(iris)
+
+set.seed(142)
 
 ```
 
@@ -71,14 +75,21 @@ ggplot(iris, aes(x=Sepal.Size, y=Petal.Size, col=Species, shape=Species)) +
 
 With 150 observations in the data set, 5-folds sounds about right for *k-fold cross-validation*.  We'll fit an actual decision tree to the data and plot the results.  The right thing to do would be training it on a subset, and validating against a final hold-out set.  But this is a lot of work.
 
-```{r}
+```{r echo=FALSE}
+
+# create holdout set
+trainIdx <- as.vector(
+  createDataPartition(iris$Species, p=.80, list=FALSE))
+
+iris.train <- iris[trainIdx,]
+iris.test <- iris[-trainIdx,]
 
 # five folds, repeated 3 times
-trCtrl <- trainControl(method="repeatedcv", number=5, repeats=3)
+trCtrl <- trainControl(method="cv", number=4)
 
 # tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
 # in this case it is the "complexity" of the decision tree, e.g. gini information gain
-treeFit <- train(Species ~ Petal.Size, data=iris, 
+treeFit <- train(Species ~ Petal.Size, data=iris.train, 
                  method="rpart",
                  trControl=trCtrl,
                  tuneLength=10)
@@ -86,8 +97,96 @@ treeFit <- train(Species ~ Petal.Size, data=iris,
 # plot the tree
 prp(treeFit$finalModel)
 
+# final error rate
+iris.test$predict <- predict(treeFit$finalModel, iris.test, type="class")
+
+dtreeErrorRate <- 1 - sum(iris.test$predict == iris.test$Species)/nrow(iris.test)
 
 ```
+
+### Decision Tree results
+The final error rate on the validation set is `r round(dtreeErrorRate*100,2)`%.
+
+### Neural Network
+Neural network inputs typically operate on input values between 0 and 1.  Transform the length and width measurements to be normalized, i.e. "scale-free".  
+
+```{r transform-for-nnet}
+
+## function to "normalize" attributes, they will range between 0-1
+descale <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+# create normalized versions of the attributes
+iris$Sepal.Length.Reg <- descale(iris$Sepal.Length)
+iris$Sepal.Width.Reg <- descale(iris$Sepal.Width)
+iris$Petal.Length.Reg <- descale(iris$Petal.Length)
+iris$Petal.Width.Reg <- descale(iris$Petal.Width)
+
+# resample
+iris.train <- iris[trainIdx,]
+iris.test <- iris[-trainIdx,]
+
+```
+
+The effectiveness of a neural-network is dependent on the selection of an appropriate structure.  Utilize the *caret* package to determine an appropriate number of hidden layers.  As a rule of thumb, the number of hidden layers in the network shouldn't exceed the formula below:
+
+$$ N^{hidden} = \frac{N^{observations}}{\alpha \times (N^{input} + N^{ouput})} $$
+
+```{r include=FALSE}
+
+## determine the maximum number of hidden layer neurons
+maxHiddenLayerNeurons <- ceiling(nrow(iris) / (2 * (4 + 3)))
+
+```
+
+Alpha is arbitrary, and will be set equal to two.  The maximum number of hidden layers is `r maxHiddenLayerNeurons`.  The caret package will do a search to find an appropriate number of hidden layer neurons.
+
+```{r caret-train-nnet}
+
+trCtrl <- trainControl(method="repeatedcv", number=4, repeats=3)
+
+trGrid <- expand.grid(size=1:maxHiddenLayerNeurons, decay=c(0.005))
+
+# fit network, capture.output suppresses annoying output messages
+discardOutput <- capture.output(
+  nnFit <- train(Species ~ Sepal.Length.Reg + Sepal.Width.Reg + 
+                 Petal.Length.Reg + Petal.Width.Reg, data=iris.train,
+               method="nnet", trControl=trCtrl, tuneLength=10,
+               tuneGrid=trGrid))
+
+```
+
+The results of the tuning the neural network is shown below.  Using the maximum number of hidden layers provides marginally better results.  The decay parameter is for regularization and serves as a pentalty function to avoid over-fitting the model.  It looks like 2 - 5 neurons in the hidden layer provide a good fit.  We'll use 3. 
+
+```{r}
+plot(nnFit)
+```
+
+```{r retrain-final-nn}
+
+# re-train with 4 hidden layer neurons
+irisNN <- nnet(Species ~ Sepal.Length.Reg + Sepal.Width.Reg + 
+                 Petal.Length.Reg + Petal.Width.Reg, size=3,
+                 data=iris.train, decay=0.005, trace=FALSE)
+
+plotnet(irisNN)
+
+```
+
+Let's apply the model to the testing data, and calculate the most probable class and error rate.
+
+```{r test-final-nn}
+
+iris.test$predictNN <- predict(irisNN, iris.test, type="class")
+
+nnErrorRate <- 1 - sum(iris.test$predictNN == iris.test$Species)/nrow(iris.test)
+
+```
+
+The final error rate is `r round(nnErrorRate * 100, 2)`%.
+
+### Support Vector Machine (SVM)
 
 
 

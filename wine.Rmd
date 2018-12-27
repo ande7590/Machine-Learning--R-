@@ -1,0 +1,290 @@
+---
+title: "Wine"
+author: "Mike McPhee Anderson"
+date: "December 24, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+if (!require(pacman)) {
+  install.packages("pacman")
+  library("pacman")
+}
+
+pacman::p_load(tidyverse, datasets, kableExtra, 
+               caret, rpart, rpart.plot, e1071,
+               nnet, NeuralNetTools, GGally, gridExtra,
+               kernlab)
+
+wine <- read.csv("data/wine.csv")
+wine$class <- as.factor(wine$class)
+
+set.seed(142)
+
+```
+
+## Wine
+
+The wine data is a high-dimensional dataset with 3 classes for prediction.  The objective is to predict the class (i.e. type of wine, labeled 1 through 3) based on 13 continuous attributes representing measurements of various chemical properties of the wine.
+
+## Visualization
+
+Since the data is highly dimensional, visualization will be difficult.  We'll throw the kitchen sink at it and do pair-plots.
+
+```{r vis-pair-plots, warning=FALSE, message=FALSE, fig.width=12, fig.height=10}
+
+ggpairs(wine, aes(color=class, alpha=0.65))
+
+```
+
+### Basic Visualization
+
+Looking at the above plot, *alcohol* and *od* seem to form a decent decision boundary, so does *flavanoid* and *proline*.  We'll eye-ball some boundaries and add them to the graph (black lines).
+
+```{r vis-drill-1, fig.width=10, fig.height=3}
+plot.alcohol.vs.od <- ggplot(wine, aes(x=alcohol, y=od, color=class)) +
+    geom_point() +
+    geom_hline(yintercept = 2.1) +
+    geom_vline(xintercept = 12.8)
+
+plot.flav.vs.proline <- ggplot(wine, aes(x=flavanoids, y=proline, color=class)) +
+    geom_point() +
+    geom_abline(intercept = 1580, slope = -(1500/4.5)) +
+    geom_abline(intercept = 120, slope = (1500/4.5))
+
+grid.arrange(plot.alcohol.vs.od, plot.flav.vs.proline, ncol=2)
+```
+
+The first plot (od vs. alcohol) looks to form a pretty straight-forward decision boundary, but the second would be a struggle with a decision-tree.  It seems that a rotation could fix it, since the decision boundary is on a line.  We'll perform an SVD to (hopefully) remove this rotation, and plot the resulting points.
+
+
+```{r vis-svd}
+
+# rotate the proline / flavanoid plot to make a cleaner decision boundary (horizontal / vertical lines)
+plot2Rot <- svd(cbind(wine$proline, wine$flavanoids))
+plot2Translated <- as.data.frame(cbind(plot2Rot$u, wine$class))
+names(plot2Translated) <- c("proline", "flavanoids", "class")
+
+plot2Translated$class <- as.factor(plot2Translated$class)
+
+ggplot(plot2Translated, aes(x=flavanoids, y=proline, color=class)) + 
+  geom_point() +
+  geom_hline(yintercept = -0.066) +
+  geom_vline(xintercept = 0.02) + 
+  geom_hline(yintercept = -0.09)
+
+
+```
+
+Looks like we got some pretty good sepearation, although not a clean as we probably could get with a manual rotation.  Adding another region seems to fix it though, so this might still be a good candidate for a decision tree.
+
+### Advanced Visualization
+
+The SVD factorization is applied during PCA.  It might be interesting to visualize the  pricipal components.
+
+```{r vis-do-pca}
+
+wine.M <- as.matrix(wine[ , 2:14])
+wine.prComp <- prcomp(wine.M)
+
+summary(wine.prComp)
+
+```
+
+Judging by the cumulative proportion... that worked pretty well.  Let's take a look at a pair plot of the principal components.
+
+```{r vis-pairs-pca, warning=FALSE, message=FALSE, fig.width=12, fig.height=10}
+
+wine.pca <- as.data.frame(cbind(wine.prComp$x, class=wine$class))
+
+wine.pca$class = as.factor(wine.pca$class)
+
+ggpairs(wine.pca, aes(color=class))
+
+```
+
+It looks like there might be a couple candidates for good decision boundaries.  The first principal component does an OK job separating red from the others, and the fourth does a good job of separating gree from blue.  Looking at them together looks decent, but not great.
+
+```{r}
+
+ggplot(wine.pca, aes(x=PC1, y=PC4, color=class)) +
+  geom_point()
+
+```
+
+
+## Feature Selection
+
+Although some feature look promising from visualization, it might be a good idea to try some automated feature selection too. First we should get a feel for which features (if any) are highly correlated. 
+
+```{r features-corr}
+
+cor(wine[,2:ncol(wine)])
+
+```
+
+*od* is pretty correlated with *total.phenols*, *flavanoids*, and *hue*.  *proanthocyanins* stands out as having a few highly correlated other variables as well.  This suggests that we should use the "big-guns" to help with feature selection.  The caret pacakge has some functionality to help with this.
+
+```{r features-lvq}
+
+trCtrl <- trainControl(method="repeatedcv", number=5, repeats=3)
+lvqFit <- train(class~., data=wine, method="lvq", preProcess="scale", trControl=trCtrl)
+
+lvqFitImportance <- varImp(lvqFit, scale=FALSE)
+
+print(lvqFitImportance)
+
+plot(lvqFitImportance)
+
+```
+
+The results suggest elimninating a couple variables.  Next, we'll check the PCA as well. 
+
+```{r features-lvq-pca}
+
+trCtrl <- trainControl(method="repeatedcv", number=5, repeats=3)
+lvqFit <- train(class~., data=wine.pca, method="lvq", trControl=trCtrl)
+
+lvqFitImportance <- varImp(lvqFit, scale=FALSE)
+
+print(lvqFitImportance)
+
+plot(lvqFitImportance)
+
+```
+
+PCA did it's job, we can probably get away with using about half the principal componenets.  Consistent with our analysis above, the first and fourth principal components look pretty important.  Components 3, 5, and 6 look pretty important too.
+
+
+## Models
+
+### Decision Tree
+
+We'll holdout 20% of the training set for testing (stratified).  
+
+```{r split-train-test}
+
+wine$svd.flavanoids = plot2Translated$flavanoids
+wine$svd.proline = plot2Translated$proline
+wine <- cbind(wine, wine.pca[, 1:13])
+
+
+# create holdout set
+trainIdx <- as.vector(
+  createDataPartition(wine$class, p=.80, list=FALSE))
+
+wine.train <- wine[trainIdx,]
+wine.test <- wine[-trainIdx,]
+
+```
+
+First we'll attempt a decision tree model on *od*, *alcohol*, *flavanoid*, and *proline*.  We'll do this using the non-transformed (via SVD) data first.
+
+```{r train-decision-tree-nontransformed}
+
+set.seed(142)
+
+# four folds
+trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 3)
+
+# tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
+# in this case it is the "complexity" of the decision tree, e.g. gini information gain
+treeFit <- train(class ~ od + alcohol + flavanoids + proline, data=wine.train, 
+                 method="rpart",
+                 trControl=trCtrl,
+                 tuneLength=10)
+
+confusionMatrix(treeFit)
+
+```
+
+The results are not great, let's try with the svd translated flavanoids and svd.
+
+
+```{r train-decisiontree-transformed}
+
+set.seed(142)
+
+# four folds
+trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 3)
+
+# tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
+# in this case it is the "complexity" of the decision tree, e.g. gini information gain
+treeFit <- train(class ~ od + alcohol + svd.flavanoids + svd.proline, data=wine.train, 
+                 method="rpart",
+                 trControl=trCtrl,
+                 tuneLength=10)
+
+confusionMatrix(treeFit)
+
+```
+
+Suprisingly, this has little effect on accuracy. Let's re-attempt this with SVM.
+
+### Support Vector Machine
+
+```{r train-svm-basic}
+
+set.seed(142)
+
+# four folds
+trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 5)
+
+trGrid <- expand.grid(C=seq(0.05, 1.5, .1))
+
+# tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
+# in this case it is the "complexity" of the decision tree, e.g. gini information gain
+svmFit <- train(class ~ od + alcohol + flavanoids + proline, data=wine.train, 
+                 preProcess="scale",
+                 method="svmLinear",
+                 trControl=trCtrl,
+                 tuneGrid=trGrid,
+                 tuneLength=10)
+
+confusionMatrix(svmFit)
+
+```
+
+Pretty decent improvement, let's see how the applying svm to the principal components improves things.
+
+```{r train-svm-pca}
+
+set.seed(142)
+
+# four folds
+trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 5)
+
+trGrid <- expand.grid(C=seq(0.05, 1.5, .1))
+
+# tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
+# in this case it is the "complexity" of the decision tree, e.g. gini information gain
+svmFit <- train(class ~ PC1 + PC4 + PC3 + PC5 + PC6, data=wine.train,
+                 method="svmLinear",
+                 trControl=trCtrl,
+                 tuneGrid=trGrid,
+                 tuneLength=10)
+
+confusionMatrix(svmFit)
+
+```
+
+There is a little to no improvement to accuracy.
+
+### Random Forest
+
+
+
+
+## Final Results
+
+```{r final-results}
+
+finalTestResults <- predict(svmFit$finalModel, wine.test %>% select(PC1, PC4, PC3, PC5, PC6))
+
+errorRate <- 1 - sum(finalTestResults == wine.test$class) / length(finalTestResults)
+
+```
+
+The final errorRate is `r round(errorRate*100, 4)`%.
+

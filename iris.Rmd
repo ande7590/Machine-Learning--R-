@@ -73,9 +73,9 @@ ggplot(iris, aes(x=Sepal.Size, y=Petal.Size, col=Species, shape=Species)) +
 
 ### Decision Tree
 
-With 150 observations in the data set, 5-folds sounds about right for *k-fold cross-validation*.  We'll fit an actual decision tree to the data and plot the results.  The right thing to do would be training it on a subset, and validating against a final hold-out set.  But this is a lot of work.
+With 150 observations in the data set, 5-folds sounds about right for *k-fold cross-validation*.  We'll fit an actual decision tree to the data and plot the results.  We'll perform training on a subset and validating against a final hold-out set. 
 
-```{r echo=FALSE}
+```{r echo=TRUE}
 
 # create holdout set
 trainIdx <- as.vector(
@@ -84,7 +84,7 @@ trainIdx <- as.vector(
 iris.train <- iris[trainIdx,]
 iris.test <- iris[-trainIdx,]
 
-# five folds, repeated 3 times
+# four folds
 trCtrl <- trainControl(method="cv", number=4)
 
 # tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
@@ -157,7 +157,7 @@ discardOutput <- capture.output(
 
 ```
 
-The results of the tuning the neural network is shown below.  Using the maximum number of hidden layers provides marginally better results.  The decay parameter is for regularization and serves as a pentalty function to avoid over-fitting the model.  It looks like 2 - 5 neurons in the hidden layer provide a good fit.  We'll use 3. 
+The results of the tuning the neural network is shown below.  Using the maximum number of hidden layers provides no better results.  The decay parameter is for regularization and serves as a pentalty function to avoid over-fitting the model.  It looks like 2 - 5 neurons in the hidden layer provide a good fit.  We'll use 3. 
 
 ```{r}
 plot(nnFit)
@@ -185,8 +185,6 @@ nnErrorRate <- 1 - sum(iris.test$predictNN == iris.test$Species)/nrow(iris.test)
 ```
 
 The final error rate is `r round(nnErrorRate * 100, 2)`%.
-
-### Support Vector Machine (SVM)
 
 
 

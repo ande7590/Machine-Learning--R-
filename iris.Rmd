@@ -19,7 +19,6 @@ pacman::p_load(tidyverse, datasets, kableExtra,
 data(iris)
 
 set.seed(142)
-
 ```
 
 ## Iris Data Set

@@ -20,8 +20,7 @@ pacman::p_load(tidyverse, datasets, kableExtra,
 wine <- read.csv("data/wine.csv")
 wine$class <- as.factor(wine$class)
 
-set.seed(142)
-
+set.seed(47)
 ```
 
 ## Wine
@@ -34,7 +33,7 @@ Since the data is highly dimensional, visualization will be difficult.  We'll th
 
 ```{r vis-pair-plots, warning=FALSE, message=FALSE, fig.width=12, fig.height=10}
 
-ggpairs(wine, aes(color=class, alpha=0.65))
+#ggpairs(wine, aes(color=class, alpha=0.65))
 
 ```
 
@@ -77,7 +76,7 @@ ggplot(plot2Translated, aes(x=flavanoids, y=proline, color=class)) +
 
 ```
 
-Looks like we got some pretty good sepearation, although not a clean as we probably could get with a manual rotation.  Adding another region seems to fix it though, so this might still be a good candidate for a decision tree.
+Looks like we got some pretty good sepearation, although not a clean as we probably could get with a manual rotation / transformation.  Adding another region seems to fix it though, so this might still be a good candidate for a decision tree.
 
 ### Advanced Visualization
 
@@ -100,13 +99,13 @@ wine.pca <- as.data.frame(cbind(wine.prComp$x, class=wine$class))
 
 wine.pca$class = as.factor(wine.pca$class)
 
-ggpairs(wine.pca, aes(color=class))
+#ggpairs(wine.pca, aes(color=class))
 
 ```
 
-It looks like there might be a couple candidates for good decision boundaries.  The first principal component does an OK job separating red from the others, and the fourth does a good job of separating gree from blue.  Looking at them together looks decent, but not great.
+It looks like there might be a couple candidates for good decision boundaries.  The first principal component does an OK job separating red from the others, and the fourth does a good job of separating green from blue.  Looking at them together looks decent, but not great.
 
-```{r}
+```{r vis-pca-drill}
 
 ggplot(wine.pca, aes(x=PC1, y=PC4, color=class)) +
   geom_point()
@@ -156,7 +155,6 @@ plot(lvqFitImportance)
 
 PCA did it's job, we can probably get away with using about half the principal componenets.  Consistent with our analysis above, the first and fourth principal components look pretty important.  Components 3, 5, and 6 look pretty important too.
 
-
 ## Models
 
 ### Decision Tree
@@ -168,7 +166,6 @@ We'll holdout 20% of the training set for testing (stratified).
 wine$svd.flavanoids = plot2Translated$flavanoids
 wine$svd.proline = plot2Translated$proline
 wine <- cbind(wine, wine.pca[, 1:13])
-
 
 # create holdout set
 trainIdx <- as.vector(
@@ -182,10 +179,6 @@ wine.test <- wine[-trainIdx,]
 First we'll attempt a decision tree model on *od*, *alcohol*, *flavanoid*, and *proline*.  We'll do this using the non-transformed (via SVD) data first.
 
 ```{r train-decision-tree-nontransformed}
-
-set.seed(142)
-
-# four folds
 trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 3)
 
 # tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
@@ -203,10 +196,6 @@ The results are not great, let's try with the svd translated flavanoids and svd.
 
 
 ```{r train-decisiontree-transformed}
-
-set.seed(142)
-
-# four folds
 trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 3)
 
 # tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
@@ -220,71 +209,65 @@ confusionMatrix(treeFit)
 
 ```
 
-Suprisingly, this has little effect on accuracy. Let's re-attempt this with SVM.
+Suprisingly, this has little effect on accuracy. Let's re-attempt this with SVM.  This should function better than the decision tree, since the boundary doesn't need to be a straight line (as with the decision tree models above).
 
 ### Support Vector Machine
 
 ```{r train-svm-basic}
-
-set.seed(142)
-
-# four folds
 trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 5)
 
 trGrid <- expand.grid(C=seq(0.05, 1.5, .1))
 
 # tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
 # in this case it is the "complexity" of the decision tree, e.g. gini information gain
-svmFit <- train(class ~ od + alcohol + flavanoids + proline, data=wine.train, 
+svmFit1 <- train(class ~ od + alcohol + flavanoids + proline, data=wine.train, 
                  preProcess="scale",
                  method="svmLinear",
                  trControl=trCtrl,
                  tuneGrid=trGrid,
                  tuneLength=10)
 
-confusionMatrix(svmFit)
+confusionMatrix(svmFit1)
 
 ```
 
-Pretty decent improvement, let's see how the applying svm to the principal components improves things.
+Pretty decent improvement, let's see how if applying svm to the principal components improves things.  This is pretty close to applying SVD.
 
 ```{r train-svm-pca}
-
-set.seed(142)
-
-# four folds
 trCtrl <- trainControl(method="repeatedcv", number=8, repeats = 5)
 
 trGrid <- expand.grid(C=seq(0.05, 1.5, .1))
 
 # tuneLength is the number of attempts made to adjust the model's "tuning" parameter,
 # in this case it is the "complexity" of the decision tree, e.g. gini information gain
-svmFit <- train(class ~ PC1 + PC4 + PC3 + PC5 + PC6, data=wine.train,
+svmFit2 <- train(class ~ PC1 + PC4 + PC3 + PC5 + PC6, data=wine.train,
                  method="svmLinear",
                  trControl=trCtrl,
                  tuneGrid=trGrid,
                  tuneLength=10)
 
-confusionMatrix(svmFit)
+confusionMatrix(svmFit2)
 
 ```
 
-There is a little to no improvement to accuracy.
+There is a small improvement to accuracy; this might be someone spurios due to additional parameter (i.e. degree of freedom).
 
 ### Random Forest
 
-
-
+TODO: but there is little reason to believe this will perform better than SVM without some feature engineering on the underlying data.  The next step would be trying to tease apart some of the class 2 / 3 instances that are being misclassified.
 
 ## Final Results
 
 ```{r final-results}
 
-finalTestResults <- predict(svmFit$finalModel, wine.test %>% select(PC1, PC4, PC3, PC5, PC6))
+finalTestResults1 <- predict(svmFit1$finalModel, wine.test %>% select(od, alcohol, flavanoids, proline))
+finalTestResults2 <- predict(svmFit2$finalModel, wine.test %>% select(PC1, PC4, PC3, PC5, PC6))
 
-errorRate <- 1 - sum(finalTestResults == wine.test$class) / length(finalTestResults)
+errorRate1 <- 1 - sum(finalTestResults1 == wine.test$class) / length(finalTestResults1)
+errorRate2 <- 1 - sum(finalTestResults2 == wine.test$class) / length(finalTestResults2)
 
 ```
 
-The final errorRate is `r round(errorRate*100, 4)`%.
+So far, the best model for this problem is the support vector machine on the principal components.  The final errorRate for the first SVM model (no PCA) is `r round(errorRate1*100, 1)`%.  The error rate for the second SVM model (with PCA) is `r round(errorRate2*100, 1)`%.  The second model clealy outperforms the first.
+
 

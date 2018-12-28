@@ -18,4 +18,18 @@ pacman::p_load(tidyverse, datasets, kableExtra,
 
 data(mpg)
 
+``` 
+
+## MPG Data Set
+
+The mpg data set is related to various attributes about cars.  The default usage is attempting to predict the miles-per-gallon (city or highway) based on various features of the car.  We'll attempt to predict the combined mpg, which is typically 55% city and 45% highway.  We'll just call it "mpg".
+
+```{r intro-defn-mpg}
+
+
+
 ```
+
+
+
+

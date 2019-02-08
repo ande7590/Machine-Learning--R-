@@ -1,6 +1,8 @@
 ---
-title: "Coronary Dataset (bnlearn)"
+title: "Coronary Data (BBN vs. GLM)"
 output: html_document
+editor_options: 
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
@@ -21,13 +23,13 @@ pacman::p_load(e1071)
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
-## Bayesian Learning Model
+### Purpose
 
-The objective of this document is to compare Bayesian 
+The objective of this document is to compare the accuracy of Bayesian Belief Network (BBN) to a logistic GLM for classification tasks.  The data set of interest is the "coronary" data, which is included with the *bnlearn* package.
 
 ### Dataset
 
-We'll use the coronary dataset to try to predict High Blood Pressure ("Pressure"").  The "work" variables correspond to strenuous mental and physical work. The dataset is as follows:
+We'll use the coronary data set to try to predict High Blood Pressure ("Pressure").  The variables are shown below with their levels.  High Blood Pressure corresponds to instances of the "Pressure" variable with level ">140".
 
 ```{r dataset-overview}
 
@@ -37,12 +39,31 @@ str(coronary_df)
 
 ```
 
-Let's split the the data by High Blood Pressure (">140") and see which features might be good predictors.
+### Class balance
+
+GLMs can be sensitive to extreme class-imbalance.  We observe a slight imbalance in the instance counts; we'll just ignore it.
+
+```{r dataset-class-balance}
+
+table(coronary_df$Pressure) %>%
+  kable(col.names=c("Pressure Level", "Count"), caption="Pressure Variable Counts") %>%
+  kable_styling()
+
+```
+
+
+### Predictor Identification
+
+Let's examine each feature in relation to the variable of interest to see which features might be good predictors.  The tables below show the percentage of variable levels within each class (High or Low Blood Pressure).  Ideally, we'll see some variables that are strongly correlated with "Pressure". 
 
 ```{r dataset-vis, results='asis'}
 
 table_captions = list(
-  
+  Smoking="Tobacco Use",
+  M..Work="Mentally Strenuous Work",
+  P..Work="Physically Strenuos Work",
+  Proteins="Ratio of Alpha to Beta Lipoproteins",
+  Family="Family history of Heart Disease"
 )
 
 for (feature_name in names(coronary_df)) {
@@ -51,15 +72,22 @@ for (feature_name in names(coronary_df)) {
       prop.table(margin=1) %>%
       `*`(100) %>%
       round(2) %>%
-      kable(caption=feature_name) %>%
+      `rownames<-`(c("Low Blood Pressure (<140)", "High Blood Pressure (>140)"))%>%
+      kable(caption=sprintf("%s (%s)", table_captions[[feature_name]], feature_name)) %>%
       kable_styling() %>%
       print()
   }
 }
 ```
 
-### Baseline Model
+Unfortunately, nothing really jumps out too much.  Mentally strenuous work perhaps shows a small effect, as do Protein Levels.  Surprisingly, Tobacco use didn't seem to have much of an effect.
+
+### Baseline Model (GLM)
+
 ```{r model-data-split}
+
+set.seed(1234)
+
 trainIdx <- as.integer(
   createDataPartition(coronary_df$Pressure, p=0.2)$Resample1
 )
@@ -68,13 +96,13 @@ coronary_df.train <- coronary_df[trainIdx, ]
 coronary_df.test <- coronary_df[-trainIdx, ]
 ```
 
-We'll start with a logistic regression as the baseline model.  We'll use a step-wise (for freature selection) logistic GLM. 
+We'll start with a logistic regression as the baseline model.  We'll use a step-wise logistic GLM to select the model with the lowest AIC. 
 
 ```{r model-logistic, message=FALSE, echo=TRUE}
 
 lm.fitControl <- trainControl(
   method="cv",
-  number=10
+  number=7
 )
 
 # find a logistic regression model using AIC for feature selection
@@ -83,14 +111,127 @@ lm.train <- train(Pressure ~ ., data=coronary_df.train,
                   trControl=lm.fitControl, trace=FALSE)
 
 # display the model (with the features selected)
-print(lm.train$finalModel)
+lm.fit <- lm.train$finalModel
+print(lm.fit)
 
 # show the confusion matrix
 lm.cfm <- confusionMatrix(lm.train)
 print(lm.cfm)
 ```
 
-Although the accuracy is better than 50-50, we only detect the event of interest (HBP) `r round(lm.cfm$table[2,2] / sum(lm.cfm$table[,2]), 2)`% of the time.  Let's see if we can do better with a Bayesian 
+Although the accuracy is better than 50-50, we only detect the event of interest (HBP) **`r round(lm.cfm$table[2,2] / sum(lm.cfm$table[,2]), 2)`%** of the time.  Let's see if we can do better with a Bayesian Belief Network (BBN).
+
+### Bayesian Belief Network
+
+We'll see if a BBN does any better.  First we need to specify or induce a graph for the network.  We'll give the Hill-Climbing (*hc*) algorithm some guidance; from our initial analysis we have reason to suspect that Proteins and M..Work have an impact on Pressure.
+
+```{r model-bbn-structure, echo=TRUE}
+
+bnn.structure <- hc(coronary_df,
+                    whitelist=data.frame(from=c("Proteins", "M..Work"), to=c("Pressure", "Pressure")))
+
+plot(bnn.structure)
+
+```
+
+We'll need to remove one edge from the network.  It doesn't make any sense that M..Work would influence family history, so we'll remove it.  Also, there was little evidence in our initial analysis that it directly influences Pressure.
+
+To make a judgement about what to do with the P..Work variable, we'll first examine it's relationship with smoking.
+
+```{r model-bnn-pwork-vs-smoke, results='asis', echo=FALSE}
+
+table(coronary_df$P..Work, coronary_df$Smoking) %>%
+  prop.table(margin=1) %>%
+  `*`(100) %>%
+  round(2) %>%
+  kable(caption="Physically Strenuous work (rows) vs. Tobacco Use (cols)") %>%
+  kable_styling() 
+
+
+```
+
+Looking at the diagonals gives us little reason to suspect correlation, so we'll remove it as well (although we could just be lazy and leave it alone, since it isn't impacting our Pressure prediction).  The final network structure is shown below.  
+
+```{r model-bbn-structure2}
+
+# remove the connection between M..work and Family
+bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+  which(to == "Family" & from == "M..Work")})
+bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+
+# remove connection between P..Work and Smoking
+bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+  which(to == "P..Work" & from == "Smoking")})
+bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+
+# remove connection between P..Work and M..Work
+bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+  which(to == "P..Work" & from == "M..Work")})
+bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+
+# remove connection between N..Work and Pressure
+bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+  which(to == "Pressure" & from == "M..Work")})
+bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+
+# add connection for family and pressure
+bnn.structure$arcs <- rbind(bnn.structure$arcs, c("Family", "Pressure"))
+
+plot(bnn.structure)
+
+```
+
+```{r bbn-model-train}
+
+bnn.fit <- bn.fit(bnn.structure, data=coronary_df.train, method="mle")
+
+# check the residuals
+bnn.fit.resid <- predict(bnn.fit, "Pressure", coronary_df.train)
+
+print("Confusion Matrix")
+confusionMatrix(bnn.fit.resid, coronary_df.train$Pressure)
+
+```
+
+There is a negligible difference in accuracy between the models; let's move on to final results.
+
+### Test Set (final results)
+
+```{r model-run-test}
+
+lm.fit.test <- predict(lm.train, coronary_df.test)
+bbn.fit.test <-  predict(bnn.fit, "Pressure", coronary_df.test)
+
+lm.test.cm <- confusionMatrix(lm.fit.test, coronary_df.test$Pressure)
+bbn.test.cm <- confusionMatrix(bbn.fit.test, coronary_df.test$Pressure)
+
+```
+
+
+The below confusion matrices are shown as percentages.  In general, the models do no better than random chance.  However, the Bayesian model has a better True Negative (TN) rate; i.e. it does a good job of categorizing low-blood pressure.  The accuracy of the models is as follows:
+
+* GLM: `r lm.test.cm$overall[["Accuracy"]]`
+* BBN: `r bbn.test.cm$overall[["Accuracy"]]`
+
+```{r model-compare}
+
+lm.test.cm$table %>%
+  prop.table() %>%
+  `*`(100) %>%
+  round(2) %>%
+  kable(caption="GLM Confusion Matrix, actual (cols) vs pred (rows)") %>%
+  kable_styling()
+
+
+bbn.test.cm$table %>%
+  prop.table() %>%
+  `*`(100) %>%
+  round(2) %>%
+  kable(caption="BBN Confusion Matrix, actual (cols) vs pred (rows)") %>%
+  kable_styling()
+
+
+```
 
 
 

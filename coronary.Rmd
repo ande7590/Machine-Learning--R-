@@ -25,7 +25,7 @@ knitr::opts_chunk$set(echo = FALSE)
 
 ### Purpose
 
-The objective of this document is to compare the accuracy of Bayesian Belief Network (BBN) to a logistic GLM for classification tasks.  The data set of interest is the "coronary" data, which is included with the *bnlearn* package.
+The objective of this document is to build a Bayesian Belief Network (BBN), and compare it to a logistic GLM for classification tasks.  I'm mostly looking for exposure to the library for a task that actually justifies it's use (unlike the data set explored in this document).  The data set of interest is the "coronary" data, which is included with the *bnlearn* package.  
 
 ### Dataset
 
@@ -88,12 +88,14 @@ Unfortunately, nothing really jumps out too much.  Mentally strenuous work perha
 
 set.seed(1234)
 
-trainIdx <- as.integer(
+testIdx <- as.integer(
   createDataPartition(coronary_df$Pressure, p=0.2)$Resample1
 )
 
-coronary_df.train <- coronary_df[trainIdx, ]
-coronary_df.test <- coronary_df[-trainIdx, ]
+coronary_df.train <- coronary_df[-testIdx, ]
+coronary_df.test <- coronary_df[testIdx, ]
+
+rm(testIdx)
 ```
 
 We'll start with a logistic regression as the baseline model.  We'll use a step-wise logistic GLM to select the model with the lowest AIC. 
@@ -123,14 +125,14 @@ Although the accuracy is better than 50-50, we only detect the event of interest
 
 ### Bayesian Belief Network
 
-We'll see if a BBN does any better.  First we need to specify or induce a graph for the network.  We'll give the Hill-Climbing (*hc*) algorithm some guidance; from our initial analysis we have reason to suspect that Proteins and M..Work have an impact on Pressure.
+We'll see if a BBN does any better.  First we need to specify or induce a graph for the network.  We'll give the Hill-Climbing (*hc*) algorithm some guidance; from our initial analysis we have reason to suspect that Proteins and M..Work have a significant impact on Pressure.
 
 ```{r model-bbn-structure, echo=TRUE}
 
-bnn.structure <- hc(coronary_df,
+bbn.structure <- hc(coronary_df,
                     whitelist=data.frame(from=c("Proteins", "M..Work"), to=c("Pressure", "Pressure")))
 
-plot(bnn.structure)
+plot(bbn.structure)
 
 ```
 
@@ -150,46 +152,46 @@ table(coronary_df$P..Work, coronary_df$Smoking) %>%
 
 ```
 
-Looking at the diagonals gives us little reason to suspect correlation, so we'll remove it as well (although we could just be lazy and leave it alone, since it isn't impacting our Pressure prediction).  The final network structure is shown below.  
+Looking at the diagonals gives us little reason to suspect correlation, so we'll remove it as well (although we could just be lazy and leave it alone, since it isn't impacting our Pressure prediction).  The final network structure is shown below.  This model should perform no differently than *Naive Bayes*, however the point of this exercise is to get acquainted with bnlearn.
 
 ```{r model-bbn-structure2}
 
 # remove the connection between M..work and Family
-bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+bbn.replaceidx <-  with(data.frame(bbn.structure$arcs), {
   which(to == "Family" & from == "M..Work")})
-bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+bbn.structure$arcs <- bbn.structure$arcs[-bbn.replaceidx, ]
 
 # remove connection between P..Work and Smoking
-bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+bbn.replaceidx <-  with(data.frame(bbn.structure$arcs), {
   which(to == "P..Work" & from == "Smoking")})
-bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+bbn.structure$arcs <- bbn.structure$arcs[-bbn.replaceidx, ]
 
 # remove connection between P..Work and M..Work
-bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+bbn.replaceidx <-  with(data.frame(bbn.structure$arcs), {
   which(to == "P..Work" & from == "M..Work")})
-bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+bbn.structure$arcs <- bbn.structure$arcs[-bbn.replaceidx, ]
 
 # remove connection between N..Work and Pressure
-bnn.replaceidx <-  with(data.frame(bnn.structure$arcs), {
+bbn.replaceidx <-  with(data.frame(bbn.structure$arcs), {
   which(to == "Pressure" & from == "M..Work")})
-bnn.structure$arcs <- bnn.structure$arcs[-bnn.replaceidx, ]
+bbn.structure$arcs <- bbn.structure$arcs[-bbn.replaceidx, ]
 
 # add connection for family and pressure
-bnn.structure$arcs <- rbind(bnn.structure$arcs, c("Family", "Pressure"))
+bbn.structure$arcs <- rbind(bbn.structure$arcs, c("Family", "Pressure"))
 
-plot(bnn.structure)
+plot(bbn.structure)
 
 ```
 
 ```{r bbn-model-train}
 
-bnn.fit <- bn.fit(bnn.structure, data=coronary_df.train, method="mle")
+bbn.fit <- bn.fit(bbn.structure, data=coronary_df.train, method="mle")
 
 # check the residuals
-bnn.fit.resid <- predict(bnn.fit, "Pressure", coronary_df.train)
+bbn.fit.resid <- predict(bbn.fit, "Pressure", coronary_df.train)
 
 print("Confusion Matrix")
-confusionMatrix(bnn.fit.resid, coronary_df.train$Pressure)
+confusionMatrix(bbn.fit.resid, coronary_df.train$Pressure)
 
 ```
 
@@ -200,7 +202,7 @@ There is a negligible difference in accuracy between the models; let's move on t
 ```{r model-run-test}
 
 lm.fit.test <- predict(lm.train, coronary_df.test)
-bbn.fit.test <-  predict(bnn.fit, "Pressure", coronary_df.test)
+bbn.fit.test <-  predict(bbn.fit, "Pressure", coronary_df.test)
 
 lm.test.cm <- confusionMatrix(lm.fit.test, coronary_df.test$Pressure)
 bbn.test.cm <- confusionMatrix(bbn.fit.test, coronary_df.test$Pressure)
@@ -208,10 +210,10 @@ bbn.test.cm <- confusionMatrix(bbn.fit.test, coronary_df.test$Pressure)
 ```
 
 
-The below confusion matrices are shown as percentages.  In general, the models do no better than random chance.  However, the Bayesian model has a better True Negative (TN) rate; i.e. it does a good job of categorizing low-blood pressure.  The accuracy of the models is as follows:
+The below confusion matrices are shown as percentages.  In general, the models do no better than random chance.  The difference in predictive power is probably explainable by the lack of k-fold cross validation on the bayesian model.
 
-* GLM: `r lm.test.cm$overall[["Accuracy"]]`
-* BBN: `r bbn.test.cm$overall[["Accuracy"]]`
+* GLM: `r 100*round(lm.test.cm$overall[["Accuracy"]],2)`%
+* BBN: `r 100*round(bbn.test.cm$overall[["Accuracy"]],2)`%
 
 ```{r model-compare}
 
@@ -221,7 +223,6 @@ lm.test.cm$table %>%
   round(2) %>%
   kable(caption="GLM Confusion Matrix, actual (cols) vs pred (rows)") %>%
   kable_styling()
-
 
 bbn.test.cm$table %>%
   prop.table() %>%

@@ -1,0 +1,96 @@
+---
+title: "Coronary Dataset (bnlearn)"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+if (!require("pacman")) {
+  install.packages("pacman")
+  library(pacman)
+}
+
+pacman::p_load(tidyverse)
+pacman::p_load(bnlearn)
+pacman::p_load(ggplot2)
+pacman::p_load(caret)
+pacman::p_load(kable)
+pacman::p_load(kableExtra)
+pacman::p_load(MASS)
+pacman::p_load(e1071)
+
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Bayesian Learning Model
+
+The objective of this document is to compare Bayesian 
+
+### Dataset
+
+We'll use the coronary dataset to try to predict High Blood Pressure ("Pressure"").  The "work" variables correspond to strenuous mental and physical work. The dataset is as follows:
+
+```{r dataset-overview}
+
+data("coronary")
+coronary_df <- data.frame(coronary)
+str(coronary_df)
+
+```
+
+Let's split the the data by High Blood Pressure (">140") and see which features might be good predictors.
+
+```{r dataset-vis, results='asis'}
+
+table_captions = list(
+  
+)
+
+for (feature_name in names(coronary_df)) {
+  if (feature_name != "Pressure") {
+    table(coronary_df$Pressure, coronary_df[[feature_name]]) %>%
+      prop.table(margin=1) %>%
+      `*`(100) %>%
+      round(2) %>%
+      kable(caption=feature_name) %>%
+      kable_styling() %>%
+      print()
+  }
+}
+```
+
+### Baseline Model
+```{r model-data-split}
+trainIdx <- as.integer(
+  createDataPartition(coronary_df$Pressure, p=0.2)$Resample1
+)
+
+coronary_df.train <- coronary_df[trainIdx, ]
+coronary_df.test <- coronary_df[-trainIdx, ]
+```
+
+We'll start with a logistic regression as the baseline model.  We'll use a step-wise (for freature selection) logistic GLM. 
+
+```{r model-logistic, message=FALSE, echo=TRUE}
+
+lm.fitControl <- trainControl(
+  method="cv",
+  number=10
+)
+
+# find a logistic regression model using AIC for feature selection
+lm.train <- train(Pressure ~ ., data=coronary_df.train,
+                  method="glmStepAIC", family=binomial(link='logit'),
+                  trControl=lm.fitControl, trace=FALSE)
+
+# display the model (with the features selected)
+print(lm.train$finalModel)
+
+# show the confusion matrix
+lm.cfm <- confusionMatrix(lm.train)
+print(lm.cfm)
+```
+
+Although the accuracy is better than 50-50, we only detect the event of interest (HBP) `r round(lm.cfm$table[2,2] / sum(lm.cfm$table[,2]), 2)`% of the time.  Let's see if we can do better with a Bayesian 
+
+
+
